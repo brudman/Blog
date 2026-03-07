@@ -122,7 +122,9 @@
 
             It is really worth keeping in mind that roles that you create for your EC2 instances can be hijacked by other users in the account if they can also spin up EC2 instances. But not every role can be hijacked, only roles that allow EC2 instances to assume them.
             <br><br>
-            Roles in the account or Service Control Policies (SCPs) can limit who can spin up EC2 instances. SCPs are defined at an organisation level and I did not test SCPs in this blog post. The below hypothetical SCP example would only allow roles that start with "CICD" to spin up EC2 instances and you could have additional controls in place in your repos to prevent malicious pull/merge requests. This is a pretty weak control though, if new roles can be created a user could just name it correctly to bypass this control. 
+            Roles in the account or Service Control Policies (SCPs) can limit who is allowed to launch EC2 instances. SCPs are defined at the organisation level and I did not test them in this blog post. The hypothetical SCP example below would only allow roles whose names start with "CICD" to launch EC2 instances, and you could combine this with controls in your repositories to prevent malicious pull or merge requests.
+
+            If users are allowed to create new roles, they could potentially bypass this control by simply creating a role with the correct name. However, an additional SCP could be used to restrict role creation and prevent users from creating roles with these naming patterns.
           <p></p>
             
 <code>{
