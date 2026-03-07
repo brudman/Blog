@@ -118,7 +118,7 @@
           <p>
             In practice there are not many controls that limit which instance profiles can be attached to an EC2 instance. One common approach is to create roles for developers and restrict which roles their EC2 instances can use with <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2.html#roles-usingrole-ec2instance-permissions" target="_blank">PassRole</a>. However, if instance profiles already exist in the account, they can generally be attached to any EC2 instance that a user launches and restricting developers to explicit roles is poor developer experience.
 
-            This post assumes that a user has permission to launch EC2 instances, is not restricted by Service Control Policies (SCPs), and that the <inline-code>iam:PassRole</inline-code> permission is not limiting which roles they are allowed to attach to EC2 instances.
+            This post assumes that a user has permission to launch EC2 instances and that the <inline-code>iam:PassRole</inline-code> permission is not limiting which roles they are allowed to attach to EC2 instances.
 
             It is really worth keeping in mind that roles that you create for your EC2 instances can be hijacked by other users in the account if they can also spin up EC2 instances. But not every role can be hijacked, only roles that allow EC2 instances to assume them.
             <br><br>
