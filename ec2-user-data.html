@@ -171,7 +171,7 @@
   ]
 }</code>
             <br>
-            I then created an EC2 instance and selected this role so AWS created an instance profile (note: even after deleting the EC2 the instance profile will remain in the account). Next I spun up an EC2 instance to act as a shell receiver and another EC2 which used the previously created instance profile so would have permissions to read and write to the S3 bucket (let's call this EC2: "S3_reader"). I also set this EC2 instance's User Data to return a shell to the shell receiver (All security groups were setup to facilitate this and a nc listener was waiting for this connection): 
+            I then created an EC2 instance and selected this role so AWS created an instance profile (note: even after deleting the EC2 the instance profile will remain in the account). Next I spun up an EC2 instance to act as a shell receiver and another EC2 which used the previously created instance profile so would have permissions to read and write to the S3 bucket (let's call this EC2: "S3_reader"). I also set this EC2 instance's User Data to return a shell to the shell receiver (All security groups were setup to facilitate this and a nc listener was waiting for this connection). User Data content: 
             
             <br><br>
 
